@@ -254,7 +254,7 @@ class OpStr(tuple):
         return OpStr(*tuple(newOp))
 
 
-def scal_opstr(a, op):
+def scal_opstr(a, op, CompositeOpStr=False):
     """Add prefactor to operator string
 
     Arguments:
@@ -265,14 +265,25 @@ def scal_opstr(a, op):
         Operator string rescaled by ``a``.
 
     """
+    if CompositeOpStr:
+        newOp = [copy.deepcopy(o) for o in op]
+        if not callable(a):
+            a = functools.partial(_id_prefactor, val=a)
 
-    if not isinstance(op, (tuple, OpStr)):
-        raise RuntimeError("Can add prefactors only to OpStr or tuple objects.")
-    
-    if isinstance(op, tuple):
-        op = OpStr(*op)
+        if callable(newOp[0]):
+            newOp[0] = functools.partial(_prod_fun, f1=a, f2=newOp[0])
+        else:
+            newOp = [a] + newOp
 
-    return a * op
+        return tuple(newOp)
+    else:
+        if not isinstance(op, (tuple, OpStr)):
+            raise RuntimeError("Can add prefactors only to OpStr or tuple objects.")
+        
+        if isinstance(op, tuple):
+            op = OpStr(*op)
+
+        return a * op
 
 
 class LocalOp(dict):
@@ -357,7 +368,7 @@ class BranchFreeOperator(Operator):
         # accounting for branchfree operators (BFO) in the operator string 
         ########
         if len(self.ops) == 1:
-            # we allow the multiplication of a single BFO with a siingle operator string
+            # we allow the multiplication of a single BFO with a single operator string
             for bfo_ind, op in enumerate(self.ops[0]):
                 contains_BFO = hasattr(op,'ops')
                 if contains_BFO: 
@@ -367,9 +378,14 @@ class BranchFreeOperator(Operator):
                 ops = []
                 for op_string in self.ops[0][bfo_ind].ops:
                     # combine the prefcators
-                    new_op_string = (functools.partial(_prod_fun,f1=op_string[0],f2=self.ops[0][0]),)
+                    if callable(self.ops[0][0]):
+                        new_op_string = (functools.partial(_prod_fun,f1=op_string[0],f2=self.ops[0][0]),)
+                        callable_shift = 1
+                    else: 
+                        new_op_string = (op_string[0],)
+                        callable_shift = 0
                     # combine the operator strings
-                    new_op_string += self.ops[0][1:bfo_ind] + op_string[1::] + self.ops[0][bfo_ind+1::]
+                    new_op_string += self.ops[0][callable_shift:bfo_ind] + op_string[1::] + self.ops[0][bfo_ind+1::]
                     # create new list
                     ops.append(new_op_string)
                 # overwrite old list
@@ -505,4 +521,3 @@ class BranchFreeOperator(Operator):
             matEl = matEl.at[diag[1:]].set(jnp.zeros((diag.shape[0] - 1,), dtype=matElsC.dtype))
 
         return sp, matEl
-

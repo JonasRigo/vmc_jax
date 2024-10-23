@@ -15,6 +15,13 @@ import jVMC.nets as nets
 from jVMC.vqs import NQS
 import jVMC.global_defs as global_defs
 
+#########################
+# check against openfermion
+#########################
+import openfermion as of
+from openfermion.ops import FermionOperator as fop
+from openfermion.linalg import get_sparse_operator
+
 import flax.linen as nn
 class Target(nn.Module):
   """Target wave function, returns a vector with the same dimension as the Hilbert space
@@ -153,6 +160,80 @@ class TestOperator(unittest.TestCase):
         hamiltonian.add(op.scal_opstr(0.1, (op.Sx(0), op.Sx(1))))
 
         hamiltonian.compile()
+
+    def test_Infidelity(self):
+        L = 3
+        keyA = random.PRNGKey(333)
+        keyA, keyB = random.split(keyA,2)
+        stateA = random.normal(keyA,(2 * 2**L,))
+        stateA = stateA[:2**L] + stateA[2**L:]*1.j
+        stateB = random.normal(keyB,(2 * 2**L,))
+        # stateB = stateB[:2**L] + stateB[2**L:]*1.j
+        stateB = stateA + random.normal(keyB,(2**L,)) * 1e-3
+
+        chiA = NQS(nets.Target(L=L))
+        chiA(jnp.ones(L,dtype=int)[None,None,:])
+        chiA.set_parameters(stateA)
+
+        chiB = NQS(nets.Target(L=L))
+        chiB(jnp.ones(L,dtype=int)[None,None,:])
+        chiB.set_parameters(stateB)
+
+        samplerA = jVMC.sampler.ExactSampler(chiA,L)
+        samplerB = jVMC.sampler.ExactSampler(chiB,L)
+
+        testInf = op.Infidelity(chiSampler=samplerA, chi=chiA,ElocBatchSize=-1,getCV=True,adaptCV=True,MovingAverageWidth=1)
+        _, _ = testInf.get_FP_loc(chiB,sample_chi=True)
+        chiB_s, chiB_log, chiB_p = samplerB.sample()
+        _, _ = testInf.get_s_primes(chiB_s)
+        psi_Floc = testInf.get_O_loc(chiB_s, chiB, chiB_log,psi_p=chiB_p)
+        infidelity = jnp.sum(psi_Floc * chiB_p)
+        dotprod = 1 - stateA.conj().T @ stateB * stateB.conj().T @ stateA / (stateA.conj().T @ stateA * stateB.conj().T @ stateB)
+        self.assertTrue(abs(infidelity.real- dotprod.real) < 1e-15)
+
+        _, _ = testInf.get_FP_loc(chiA,sample_chi=True)
+        chiB_s, chiB_log, chiB_p = samplerB.sample()
+        _, _ = testInf.get_s_primes(chiB_s)
+        psi_Floc = testInf.get_O_loc(chiB_s, chiB, chiB_log,psi_p=chiB_p)
+        testInf.CVc - (-0.5)
+        self.assertTrue(abs(testInf.CVc - (-0.5)) < 1e-2)
+
+    def test_OperatorComposition(self):
+        L = 4
+        key = random.PRNGKey(332)
+        state = random.normal(key,(2 * 2**L,))
+        state = state[:2**L] + state[2**L:]*1.j
+
+        chi = NQS(nets.Target(L=L))
+        chi(jnp.ones(L,dtype=int)[None,None,:])
+        chi.set_parameters(state)
+
+        chiSampler = jVMC.sampler.ExactSampler(chi,L)
+
+        OpA = op.BranchFreeOperator()
+        OpA.add(op.scal_opstr( 1., ( op.number(2), ), CompositeOpStr=True ) )
+        OpA.add(op.scal_opstr( 1., ( op.number(1), ), CompositeOpStr=True ) )
+        _ = OpA.compile()
+
+        OpC = op.BranchFreeOperator()
+        OpC.add(op.scal_opstr( 1., (op.number(0),OpA,op.number(3) ), CompositeOpStr=True ) )
+        _ = OpC.compile()
+
+        OpB = op.BranchFreeOperator()
+        OpB.add(op.scal_opstr( 1., ( op.number(0),op.creation(2),op.annihilation(2),op.number(3) ), CompositeOpStr=True ) )
+        OpB.add(op.scal_opstr( 1., ( op.number(0),op.creation(1),op.annihilation(1),op.number(3) ), CompositeOpStr=True ) )
+        _ = OpB.compile()
+
+        obs = jVMC.util.measure({"B": OpB, "C": OpC}, chi, chiSampler,numSamples=2**16)
+
+        self.assertTrue(jnp.allclose(obs["B"]['mean'],obs["C"]['mean'],1e-15))
+
+        OpO = fop(((2,1),(2,0)),1.)+fop(((1,1),(1,0)),1.)
+        OpO = fop(((0,1),(0,0)),1.)*OpO*fop(((3,1),(3,0)),1.)
+        OpO = get_sparse_operator(OpO).toarray()
+
+        ofResult = float((state.conj().T @ OpO @ state / (state.conj().T @ state)).real)
+        self.assertTrue(jnp.allclose(ofResult,float(obs["C"]['mean'][0]),1e-10))
 
     def test_fermionic_operators(self):
         L = 2
