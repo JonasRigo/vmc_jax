@@ -450,7 +450,7 @@ class BranchFreeOperator(Operator):
         def arg_fun(*args, prefactor, init):
             N = len(prefactor)
             # JBR: avoid parallelization for small N or single device
-            if N<50 or global_defs.device_count() == 1:
+            if N<50:# or global_defs.device_count() == 1:
                 res = init
                 for i,f in prefactor:
                     res[i] = f(*args)

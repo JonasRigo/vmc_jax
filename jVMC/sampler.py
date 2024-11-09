@@ -134,7 +134,7 @@ class MCSampler:
             self.key = key
         else:
             self.key = jax.random.PRNGKey(key)
-        self.key = jax.random.split(self.key, mpi.commSize)[mpi.rank]
+        # self.key = jax.random.split(self.key, mpi.commSize)[mpi.rank]
         self.key = jax.random.split(self.key, global_defs.device_count())
         self.thermalizationSweeps = thermalizationSweeps
         self.sweepSteps = sweepSteps

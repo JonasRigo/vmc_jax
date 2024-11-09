@@ -49,6 +49,24 @@ def jit_my_stuff():
 
         mpiPmapDevices = global_defs.myPmapDevices
 
+# comm subgroups
+def create_subgroups(subset_ranks):
+    global comm
+    global commSize
+    global rank
+    # Define the ranks you want to include in the reduction (e.g., ranks 0, 2, 4)
+    # Create a group from the original communicator
+    world_group = comm.Get_group()
+
+    # Create a new group that includes only the subset of ranks
+    subset_group = world_group.Incl(subset_ranks)
+
+    # Create a new communicator based on the subset group
+    comm = comm.Create(subset_group)
+    commSize = comm.Get_size()
+    rank = comm.Get_rank()
+
+    print("New communicator size: ", commSize)
 
 def distribute_sampling(numSamples, localDevices=None, numChainsPerDevice=1) -> int:
     """Distribute sampling tasks across processes and devices.

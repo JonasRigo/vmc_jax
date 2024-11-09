@@ -76,6 +76,18 @@ class h5SaveParams(object):
             g[key] = value[()]  # Use [()] to get the value as a NumPy array
         self.close(f)
         return flax.serialization.from_state_dict(void_params,params)
+
+    def return_keys(self):
+        f = self.open()
+        keys = [key for key in f.keys()]
+        self.close(f)
+        return keys
+    
+    def return_attr(self,group_name):
+        f = self.open()
+        attr = f[group_name].attrs
+        self.close(f)
+        return attr
     
     def close(self,f):
         f.flush()
