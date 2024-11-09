@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import jVMC.global_defs as global_defs
+import jVMC.mpi_wrapper as mpi
 from mpi4py import MPI
 from . import Operator
 
@@ -456,7 +457,7 @@ class BranchFreeOperator(Operator):
                     res[i] = f(*args)
             else:
                 # parallelize this, because jit compilation for each element can be slow
-                comm = MPI.COMM_WORLD
+                comm = mpi.get_subgroup_comm() #MPI.COMM_WORLD
                 commSize = comm.Get_size()
                 rank = comm.Get_rank()
                 nEls = (N + commSize - 1) // commSize

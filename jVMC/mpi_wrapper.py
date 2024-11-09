@@ -68,6 +68,10 @@ def create_subgroups(subset_ranks):
 
     print("New communicator size: ", commSize)
 
+def get_subgroup_comm():
+    global comm
+    return comm
+
 def distribute_sampling(numSamples, localDevices=None, numChainsPerDevice=1) -> int:
     """Distribute sampling tasks across processes and devices.
 
