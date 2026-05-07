@@ -73,7 +73,7 @@ class MCSampler:
         :math:`p_{\\mu}(s)=\\frac{|\\psi(s)|^{\\mu}}{\\sum_s|\\psi(s)|^{\\mu}}`.
 
     For :math:`\\mu=2` this corresponds to sampling from the Born distribution. \
-    :math:`0\leq\\mu<2` can be used to perform importance sampling \
+    :math:`0\\leq\\mu<2` can be used to perform importance sampling \
     (see `[arXiv:2108.08631] <https://arxiv.org/abs/2108.08631>`_).
 
     Sampling is automatically distributed accross MPI processes and locally available \
@@ -114,7 +114,12 @@ class MCSampler:
         self.orbit = None
         if isinstance(self.net.net, SymNet):
             self.orbit = self.net.net.orbit.orbit
-
+            if self.net.is_gumbel:
+                raise NotImplemented("Gumbel with symmetrization not implemented")
+        
+        if self.net.is_gumbel and  global_defs.device_count()>1:
+            ### raise errror for more devices
+            raise NotImplemented('Gumbel on more devices not implemented')
         stateShape = (global_defs.device_count(), numChains) + sampleShape
         if initState is None:
             initState = jnp.zeros(sampleShape, dtype=np.int32)
@@ -122,6 +127,7 @@ class MCSampler:
 
         # Make sure that net is initialized
         self.net(self.states)
+        self.sampler_net, _ = self.net.get_sampler_net()
 
         self.logProbFactor = logProbFactor
         self.mu = mu
@@ -134,7 +140,7 @@ class MCSampler:
             self.key = key
         else:
             self.key = jax.random.PRNGKey(key)
-        # self.key = jax.random.split(self.key, mpi.commSize)[mpi.rank]
+        self.key = jax.random.split(self.key, mpi.commSize)[mpi.rank]
         self.key = jax.random.split(self.key, global_defs.device_count())
         self.thermalizationSweeps = thermalizationSweeps
         self.sweepSteps = sweepSteps
@@ -149,6 +155,17 @@ class MCSampler:
         # jit'd member functions
         self._get_samples_jitd = {}  # will hold a jit'd function for each number of samples
         self._randomize_samples_jitd = {}  # will hold a jit'd function for each number of samples
+
+
+        # pmap'd helper function
+        self._logAccProb_pmapd = global_defs.pmap_for_my_devices(self._logAccProb,
+                                                                 in_axes=(0, None, None, None),
+                                                                 static_broadcasted_argnums=(2,))
+
+    def _logAccProb(self, x, mu, sampler_net, netParams):
+        # vmap is over parallel MC chains
+        return jax.vmap(lambda y: mu * jnp.real(sampler_net(netParams, y)), in_axes=(0,))(x)
+
 
     def set_number_of_samples(self, N):
         """Set default number of samples.
@@ -208,6 +225,22 @@ class MCSampler:
 
         if numSamples is None:
             numSamples = self.numSamples
+        
+        if self.net.is_gumbel:
+            if parameters is not None:
+                tmpP = self.net.params
+                self.net.set_parameters(parameters)
+            configs, coeffs, _, kappa = self._get_samples_gen(self.net.parameters, numSamples, multipleOf)
+            coeffs = self.net(configs)
+            log_probs = jnp.real(coeffs) / self.logProbFactor
+            re_weights = jnp.nan_to_num(
+                jnp.exp(log_probs) / (-jnp.expm1(-jnp.exp(log_probs - kappa))),
+                0
+            )
+            rescaled_coeffs = re_weights / re_weights.sum()
+            if parameters is not None:
+                self.net.params = tmpP
+            return configs, coeffs, rescaled_coeffs# jnp.ones(configs.shape[:2]) / jnp.prod(jnp.asarray(configs.shape[:2]))
 
         if self.net.is_generator:
             if parameters is not None:
@@ -239,7 +272,8 @@ class MCSampler:
         tmpKey2 = tmpKeys[2 * global_defs.device_count():]
 
         samples = self.net.sample(numSamples, tmpKey, parameters=params)
-
+        if self.net.is_gumbel:
+            return samples
         if not str(numSamples) in self._randomize_samples_jitd:
             self._randomize_samples_jitd[str(numSamples)] = global_defs.pmap_for_my_devices(self._randomize_samples, static_broadcasted_argnums=(), in_axes=(0, 0, None))
 
@@ -347,11 +381,7 @@ class MCSampler:
 
     def _mc_init(self, netParams):
 
-        # Initialize logAccProb
-        net, _ = self.net.get_sampler_net()
-        self.logAccProb = global_defs.pmap_for_my_devices(
-            lambda x: jax.vmap(lambda y: self.mu * jnp.real(net(netParams, y)), in_axes=(0,))(x)
-        )(self.states)
+        self.logAccProb = self._logAccProb_pmapd(self.states, self.mu, self.sampler_net, netParams)
 
         shape = (global_defs.device_count(),) + (1,)
 
@@ -498,7 +528,7 @@ class ExactSampler:
         Returns:
             ``configs, logPsi, p``: All computational basis configurations, \
             corresponding wave function coefficients, and probabilities \
-            :math:`|\psi(s)|^2` (normalized).
+            :math:`|\\psi(s)|^2` (normalized).
         """
 
         if parameters is not None:
